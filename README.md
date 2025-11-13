@@ -15,7 +15,7 @@ This currently supports:
 - ✅ ***full FFI jit/vmap integration***
 - ✅ ***all*** cuDSS datatypes (F32, F64, C64, C128)
 - ✅ ***all*** cuDSS solvers (general, symmetric, symmetric positive defnite, hermitian, hermitian positive definite)
-- ✅ ***all*** cuDSS outputs ([see example](examples/outputs.py))
+- ✅ ***all*** cuDSS outputs ([see example](examples/cudss/outputs.py))
 - ✅ upper/lower triangular and full sparse matrix definitions
 
 This currently lacks:
@@ -29,10 +29,10 @@ Caveats:
 
 ### Examples
 
-* [JAX transformation composability](examples/composability.py)
-* [Testing all available datatypes](examples/datatypes.py)
-* [Seeing all cuDSS auxilliary outputs](examples/outputs.py)
-* [Testing all available solvers (general, sym, herm, spd, hpd)](examples/solver_types.py)
+* [JAX transformation composability](examples/cudss/composability.py)
+* [Testing all available datatypes](examples/cudss/datatypes.py)
+* [Seeing all cuDSS auxilliary outputs](examples/cudss/outputs.py)
+* [Testing all available solvers (general, sym, herm, spd, hpd)](examples/cudss/solver_types.py)
 
 
 # Installation
