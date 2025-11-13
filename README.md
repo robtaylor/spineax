@@ -27,6 +27,14 @@ Caveats:
 
 - Currently on the first call to the solve function we perform METIS reordering, analysis, factorization, and solve. Then on subsequent calls we perform only warm refactorization and solve. If there is demand for only a solve or only a refactorization I can support individual calls for these components later.
 
+### Examples
+
+* [JAX transformation composability](examples/composability.py)
+* [Testing all available datatypes](examples/datatypes.py)
+* [Seeing all cuDSS auxilliary outputs](examples/outputs.py)
+* [Testing all available solvers (general, sym, herm, spd, hpd)](examples/solver_types.py)
+
+
 # Installation
 
 Requirements:
@@ -43,7 +51,6 @@ conda activate spineax
 pip install .
 ```
 
-# Examples
 
 
 
