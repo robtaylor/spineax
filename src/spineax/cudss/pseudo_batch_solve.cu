@@ -18,7 +18,7 @@ they officially support it
 #include <vector>
 #include <complex>
 #include <type_traits>
-#include <cuComplex.h> // For device-side complex number operations
+// #include <cuComplex.h> // For device-side complex number operations
 
 #include "cuda_runtime_api.h"
 #include "nanobind/nanobind.h"
@@ -118,6 +118,10 @@ struct CudssBatchState {
     size_t sizeWritten;
     cudaDataType cuda_dtype = get_cuda_data_type<T>();
 
+    // Cache pointer addresses to detect if sparsity pattern has changed
+    int32_t* cached_offsets_ptr = nullptr;
+    int32_t* cached_columns_ptr = nullptr;
+
     // this is literally only for debugging
     using native_dtype = typename get_native_data_type<T>::type;
 
@@ -148,10 +152,6 @@ template <> ffi::TypeId CudssBatchState<ffi::C128>::id = {};
 template <ffi::DataType T>
 static ffi::ErrorOr<std::unique_ptr<CudssBatchState<T>>> CudssInstantiate(
     const int64_t batch_size_64,               // need to know without other structural data
-    int32_t* offsets_ptr,                   // pointers and sizes of csr structure defn per batch element
-    const int64_t offsets_size,             // pointers and sizes of csr structure defn per batch element
-    int32_t* columns_ptr,                   // pointers and sizes of csr structure defn per batch element
-    const int64_t columns_size,             // pointers and sizes of csr structure defn per batch element
     const int64_t device_id,                // the device to run this on
     const int64_t mtype_id,                 // {0: gen, 1: sym, 2: herm, 3: spd, 4: hpd}
     const int64_t mview_id                  // {0: full, 1: triu, 2: tril}
@@ -198,8 +198,7 @@ static ffi::ErrorOr<std::unique_ptr<CudssBatchState<T>>> CudssInstantiate(
     }
 
     // Store uniform dimensions and batch size
-    state->n = offsets_size - 1;
-    state->nnz = columns_size;
+
     state->nrhs = 1;
 
     // CUDA setup can happen here before any cudaMallocs
@@ -216,51 +215,71 @@ static ffi::ErrorOr<std::unique_ptr<CudssBatchState<T>>> CudssInstantiate(
 
 // execution ===================================================================
 
-// Helper function to create batched CSR structure - this could be a kernel to accelerate it
+// GPU kernel to create batched column indices in parallel
+__global__ void create_batched_columns_kernel(
+    const int32_t* __restrict__ single_columns,
+    int32_t* __restrict__ batched_columns,
+    int64_t nnz, int64_t n, int64_t batch_size)
+{
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t total_elements = batch_size * nnz;
+
+    if (idx < total_elements) {
+        int64_t batch_idx = idx / nnz;          // Which batch
+        int64_t col_idx = idx % nnz;            // Which element within batch
+        int32_t column_offset = batch_idx * n;  // Offset for this batch
+
+        batched_columns[idx] = single_columns[col_idx] + column_offset;
+    }
+}
+
+// GPU kernel to create batched row offsets in parallel
+__global__ void create_batched_offsets_kernel(
+    const int32_t* __restrict__ single_offsets,
+    int32_t* __restrict__ batched_offsets,
+    int64_t n, int64_t nnz, int64_t batch_size)
+{
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t total_elements = batch_size * n + 1;
+
+    if (idx < total_elements) {
+        if (idx == batch_size * n) {
+            // Last element: total nnz
+            batched_offsets[idx] = batch_size * nnz;
+        } else {
+            int64_t batch_idx = idx / n;        // Which batch
+            int64_t row_idx = idx % n;          // Which row within batch
+            int32_t nnz_offset = batch_idx * nnz; // Offset for this batch
+
+            batched_offsets[idx] = single_offsets[row_idx] + nnz_offset;
+        }
+    }
+}
+
+// GPU-accelerated function to populate batched CSR structure
+// Note: Memory must be pre-allocated before calling this function
 static void create_batched_csr_structure(
     int32_t* single_offsets_ptr, int32_t* single_columns_ptr,
     int64_t n, int64_t nnz, int64_t batch_size,
     int32_t** batched_offsets_ptr, int32_t** batched_columns_ptr,
     cudaStream_t stream = 0)
 {
-    // 1. Copy single system offsets and columns to host
-    std::vector<int32_t> host_offsets(n + 1);
-    std::vector<int32_t> host_columns(nnz);
-    
-    cudaMemcpyAsync(host_offsets.data(), single_offsets_ptr, (n + 1) * sizeof(int32_t), 
-                   cudaMemcpyDeviceToHost, stream);
-    cudaMemcpyAsync(host_columns.data(), single_columns_ptr, nnz * sizeof(int32_t), 
-                   cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    // Launch kernels to populate batched arrays from single pattern
+    const int threads = 256;
 
-    // 2. Create batched columns on host
-    std::vector<int32_t> host_batched_columns(batch_size * nnz);
-    for (int64_t i = 0; i < batch_size; ++i) {
-        int32_t column_offset = i * n;
-        for (int64_t j = 0; j < nnz; ++j) {
-            host_batched_columns[i * nnz + j] = host_columns[j] + column_offset;
-        }
-    }
+    // Launch kernel to create batched columns
+    int64_t total_columns = batch_size * nnz;
+    int blocks_columns = (total_columns + threads - 1) / threads;
+    create_batched_columns_kernel<<<blocks_columns, threads, 0, stream>>>(
+        single_columns_ptr, *batched_columns_ptr, nnz, n, batch_size);
 
-    // 3. Create batched offsets on host
-    std::vector<int32_t> host_batched_offsets(batch_size * n + 1);
-    for (int64_t i = 0; i < batch_size; ++i) {
-        int32_t nnz_offset = i * nnz;
-        for (int64_t j = 0; j < n; ++j) {
-            host_batched_offsets[i * n + j] = host_offsets[j] + nnz_offset;
-        }
-    }
-    host_batched_offsets[batch_size * n] = batch_size * nnz;
+    // Launch kernel to create batched offsets
+    int64_t total_offsets = batch_size * n + 1;
+    int blocks_offsets = (total_offsets + threads - 1) / threads;
+    create_batched_offsets_kernel<<<blocks_offsets, threads, 0, stream>>>(
+        single_offsets_ptr, *batched_offsets_ptr, n, nnz, batch_size);
 
-    // 4. Allocate device memory and copy back
-    cudaMallocAsync(batched_columns_ptr, batch_size * nnz * sizeof(int32_t), stream);
-    cudaMallocAsync(batched_offsets_ptr, (batch_size * n + 1) * sizeof(int32_t), stream);
-    
-    cudaMemcpyAsync(*batched_columns_ptr, host_batched_columns.data(), 
-                   batch_size * nnz * sizeof(int32_t), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(*batched_offsets_ptr, host_batched_offsets.data(), 
-                   (batch_size * n + 1) * sizeof(int32_t), cudaMemcpyHostToDevice, stream);
-    cudaStreamSynchronize(stream);
+    // No synchronization needed here - stream will handle dependencies
 }
 
 template <ffi::DataType T>
@@ -269,14 +288,12 @@ static ffi::Error CudssExecute(
     CudssBatchState<T>* state,                      // the state we instantiated in CudssInstantiate
     ffi::Buffer<T> b_values_buf,            // the real input data that varies per solution
     ffi::Buffer<T> csr_values_buf,          // the real input data that varies per solution
+    ffi::Buffer<ffi::S32> offsets_buf,      // sparsity pattern row offsets
+    ffi::Buffer<ffi::S32> columns_buf,      // sparsity pattern column indices
     ffi::ResultBuffer<T> out_values_buf,    // the output buffer we write the answer to
     ffi::ResultBuffer<T> diag_buf, // the output buffer for inertia [batch_size, 3]
     ffi::ResultBuffer<ffi::S32> perm_buf, // the output buffer for inertia [batch_size, 3]
     const int64_t batch_size_64,               // need to know without other structural data
-    int32_t* offsets_ptr,             // pointers and sizes of csr structure defn
-    const int64_t offsets_size,             // pointers and sizes of csr structure defn
-    int32_t* columns_ptr,             // pointers and sizes of csr structure defn
-    const int64_t columns_size,             // pointers and sizes of csr structure defn
     const int64_t device_id,                    // the device to run this on
     const int64_t mtype_id,                     // {0: gen, 1: sym, 2: herm, 3: spd, 4: hpd}
     const int64_t mview_id                      // {0: full, 1: triu, 2: tril}
@@ -284,14 +301,26 @@ static ffi::Error CudssExecute(
     // printf("in execute \n");
     // cudaStreamSynchronize(stream);
     if (state->call_count == 0) {
+        
+        // figure this out on first call
+        state->n = offsets_buf.element_count() - 1;
+        state->nnz = columns_buf.element_count();
+
+        // Allocate device memory for batched CSR structure (done once)
+        cudaMallocAsync(&state->batched_columns_ptr, batch_size_64 * state->nnz * sizeof(int32_t), stream);
+        cudaMallocAsync(&state->batched_offsets_ptr, (batch_size_64 * state->n + 1) * sizeof(int32_t), stream);
 
         // form the new batched offsets and ptrs here!
         create_batched_csr_structure(
-            offsets_ptr, columns_ptr,
+            offsets_buf.typed_data(), columns_buf.typed_data(),
             state->n, state->nnz, batch_size_64,
             &state->batched_offsets_ptr, &state->batched_columns_ptr,
             stream
         );
+
+        // Cache the input pointers to detect pattern changes on subsequent calls
+        state->cached_offsets_ptr = offsets_buf.typed_data();
+        state->cached_columns_ptr = columns_buf.typed_data();
 
         // CuDSS setup
         CUDSS_CALL_AND_CHECK(cudssCreate(&state->handle), state->status, "cudssCreate");
@@ -339,7 +368,27 @@ static ffi::Error CudssExecute(
         // stream can change between calls!!!
         CUDSS_CALL_AND_CHECK(cudssSetStream(state->handle, stream), state->status, "cudssSetStream");
 
-        // update the csr_values data on device - just overwrite prior pointers
+        // Check if sparsity pattern pointers have changed
+        int32_t* current_offsets_ptr = offsets_buf.typed_data();
+        int32_t* current_columns_ptr = columns_buf.typed_data();
+
+        if (current_offsets_ptr != state->cached_offsets_ptr ||
+            current_columns_ptr != state->cached_columns_ptr) {
+            // Pattern pointers changed - recompute batched structure
+            create_batched_csr_structure(
+                current_offsets_ptr, current_columns_ptr,
+                state->n, state->nnz, batch_size_64,
+                &state->batched_offsets_ptr, &state->batched_columns_ptr,
+                stream
+            );
+
+            // Update cached pointers
+            state->cached_offsets_ptr = current_offsets_ptr;
+            state->cached_columns_ptr = current_columns_ptr;
+        }
+        // else: Pointers unchanged - batched structure is still valid, skip kernel!
+
+        // Update the values pointer which changes between calls
         CUDSS_CALL_AND_CHECK(cudssMatrixSetValues(state->A, csr_values_buf.typed_data()), state->status, "update_pointers A");
         CUDSS_CALL_AND_CHECK(cudssMatrixSetValues(state->b, b_values_buf.typed_data()), state->status, "update_pointers b");
         CUDSS_CALL_AND_CHECK(cudssMatrixSetValues(state->x, out_values_buf->typed_data()), state->status, "update_pointers x");
@@ -368,10 +417,6 @@ static ffi::Error CudssExecute(
     XLA_FFI_DEFINE_HANDLER(kCudssInstantiate##TypeName, CudssInstantiate<DataType>, \
         ffi::Ffi::BindInstantiate() \
             .Attr<int64_t>("batch_size") \
-            .Attr<ffi::Pointer<int32_t>>("offsets_ptr") \
-            .Attr<int64_t>("offsets_size") \
-            .Attr<ffi::Pointer<int32_t>>("columns_ptr") \
-            .Attr<int64_t>("columns_size") \
             .Attr<int64_t>("device_id") \
             .Attr<int64_t>("mtype_id") \
             .Attr<int64_t>("mview_id")); \
@@ -382,15 +427,13 @@ static ffi::Error CudssExecute(
             .Ctx<ffi::State<CudssBatchState<DataType>>>() \
             .Arg<ffi::Buffer<DataType>>() \
             .Arg<ffi::Buffer<DataType>>() \
+            .Arg<ffi::Buffer<ffi::S32>>() \
+            .Arg<ffi::Buffer<ffi::S32>>() \
             .Ret<ffi::Buffer<DataType>>() \
             .Ret<ffi::Buffer<DataType>>() \
             .Ret<ffi::Buffer<ffi::S32>>() \
             /* Attributes must also be passed to execute */ \
             .Attr<int64_t>("batch_size") \
-            .Attr<ffi::Pointer<int32_t>>("offsets_ptr") \
-            .Attr<int64_t>("offsets_size") \
-            .Attr<ffi::Pointer<int32_t>>("columns_ptr") \
-            .Attr<int64_t>("columns_size") \
             .Attr<int64_t>("device_id") \
             .Attr<int64_t>("mtype_id") \
             .Attr<int64_t>("mview_id"));

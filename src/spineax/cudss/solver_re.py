@@ -47,10 +47,8 @@ def general_single_solve_impl(
         name, 
         b_values, 
         csr_values, 
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
+        offsets,
+        columns,
         device_id, 
         mtype_id, 
         mview_id
@@ -81,10 +79,8 @@ def general_single_solve_impl(
     out = call(
         b_values, 
         csr_values, 
-        offsets_ptr = offsets_ptr,
-        offsets_size = offsets_size,
-        columns_ptr = columns_ptr,
-        columns_size = columns_size,
+        offsets,
+        columns,
         device_id = device_id, 
         mtype_id = mtype_id,
         mview_id = mview_id,
@@ -128,10 +124,8 @@ mlir.register_lowering(solve_single_c128_re_p, solve_single_c128_re_low)
 def solve_aval(
         b_values, 
         csr_values, 
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
+        offsets,
+        columns,
         device_id, 
         mtype_id, 
         mview_id
@@ -158,10 +152,6 @@ def solve_aval(
 # single solve interface =======================================================
 @ft.partial(
     jax.jit, static_argnames=[
-        "offsets_ptr",
-        "offsets_size",
-        "columns_ptr",
-        "columns_size",
         "device_id",
         "mtype_id",
         "mview_id"
@@ -170,10 +160,8 @@ def solve_aval(
 def solve(
         b_values, 
         csr_values, 
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
+        offsets,
+        columns,
         device_id, 
         mtype_id, 
         mview_id
@@ -194,10 +182,8 @@ def solve(
     return solver.bind(
         b_values, 
         csr_values, 
-        offsets_ptr = offsets_ptr,
-        offsets_size = offsets_size,
-        columns_ptr = columns_ptr,
-        columns_size = columns_size,
+        offsets,
+        columns,
         device_id = device_id, 
         mtype_id = mtype_id,
         mview_id = mview_id,
@@ -207,14 +193,10 @@ def solve(
 
 class CuDSSSolverRE:
     def __init__(self, csr_offsets, csr_columns, device_id, mtype_id, mview_id):
-        self._csr_offsets = csr_offsets # hold reference to structures alive in state
-        self._csr_columns = csr_columns # hold reference to structures alive in state
 
         self._solve_fn = ft.partial(solve,
-            offsets_ptr=self._csr_offsets.unsafe_buffer_pointer(),
-            offsets_size=self._csr_offsets.size,
-            columns_ptr=self._csr_columns.unsafe_buffer_pointer(),
-            columns_size=self._csr_columns.size,
+            offsets=csr_offsets,
+            columns=csr_columns,
             device_id=device_id,
             mtype_id=mtype_id,
             mview_id=mview_id

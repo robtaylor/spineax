@@ -130,7 +130,7 @@ nanobind_add_module(batch_solve NOMINSIZE
 
 # pseudo batch (enable features lacking in normal batch whilst also solving a batch)
 nanobind_add_module(pbatch_solve NOMINSIZE 
-  src/spineax/cudss/pseudo_batch_solve.cpp
+  src/spineax/cudss/pseudo_batch_solve.cu
 )
 
 # single solve and Return Everything (return all data that cuDSS has)

@@ -129,10 +129,8 @@ def general_single_solve_impl(
         name, 
         b_values, 
         csr_values, 
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
+        csr_offsets,
+        csr_columns,
         device_id, 
         mtype_id, 
         mview_id
@@ -151,10 +149,8 @@ def general_single_solve_impl(
     x, diag, perm = call(
         b_values, 
         csr_values, 
-        offsets_ptr = offsets_ptr,
-        offsets_size = offsets_size,
-        columns_ptr = columns_ptr,
-        columns_size = columns_size,
+        csr_offsets,
+        csr_columns,
         device_id = device_id, 
         mtype_id = mtype_id,
         mview_id = mview_id,
@@ -183,11 +179,9 @@ def general_batch_solve_impl(
         name, 
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size,
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
         device_id, 
         mtype_id, 
         mview_id
@@ -206,11 +200,9 @@ def general_batch_solve_impl(
     x, diag, perm = call(
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size = batch_size,
-        offsets_ptr = offsets_ptr,
-        offsets_size = offsets_size,
-        columns_ptr = columns_ptr,
-        columns_size = columns_size,
         device_id = device_id, 
         mtype_id = mtype_id,
         mview_id = mview_id,
@@ -239,11 +231,9 @@ def general_pbatch_solve_impl(
         name, 
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size,
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
         device_id, 
         mtype_id, 
         mview_id
@@ -262,11 +252,9 @@ def general_pbatch_solve_impl(
     x, diag, perm = call(
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size = batch_size,
-        offsets_ptr = offsets_ptr,
-        offsets_size = offsets_size,
-        columns_ptr = columns_ptr,
-        columns_size = columns_size,
         device_id = device_id, 
         mtype_id = mtype_id,
         mview_id = mview_id,
@@ -345,10 +333,8 @@ mlir.register_lowering(solve_pbatch_c128_p, solve_pbatch_c128_low)
 def solve_aval(
         b_values, 
         csr_values, 
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
+        csr_offsets,
+        csr_columns,
         device_id, 
         mtype_id, 
         mview_id
@@ -365,11 +351,9 @@ def solve_aval(
 def solve_batch_aval(
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size,
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
         device_id, 
         mtype_id, 
         mview_id
@@ -386,11 +370,9 @@ def solve_batch_aval(
 def solve_pbatch_aval(
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size,
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
         device_id, 
         mtype_id, 
         mview_id
@@ -403,10 +385,6 @@ def solve_pbatch_aval(
 # single solve interface =======================================================
 @ft.partial(
     jax.jit, static_argnames=[
-        "offsets_ptr",
-        "offsets_size",
-        "columns_ptr",
-        "columns_size",
         "device_id",
         "mtype_id",
         "mview_id"
@@ -415,10 +393,8 @@ def solve_pbatch_aval(
 def solve(
         b_values, 
         csr_values, 
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
+        csr_offsets,
+        csr_columns,
         device_id, 
         mtype_id, 
         mview_id
@@ -439,10 +415,8 @@ def solve(
     return solver.bind(
         b_values, 
         csr_values, 
-        offsets_ptr = offsets_ptr,
-        offsets_size = offsets_size,
-        columns_ptr = columns_ptr,
-        columns_size = columns_size,
+        csr_offsets,
+        csr_columns,
         device_id = device_id, 
         mtype_id = mtype_id,
         mview_id = mview_id,
@@ -452,10 +426,6 @@ def solve(
 @ft.partial(
     jax.jit, static_argnames=[
         "batch_size",
-        "offsets_ptr",
-        "offsets_size",
-        "columns_ptr",
-        "columns_size",
         "device_id",
         "mtype_id",
         "mview_id"
@@ -464,11 +434,9 @@ def solve(
 def batch_solve(
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size,
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
         device_id, 
         mtype_id, 
         mview_id
@@ -489,11 +457,9 @@ def batch_solve(
     return solver.bind(
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size = batch_size,
-        offsets_ptr = offsets_ptr,
-        offsets_size = offsets_size,
-        columns_ptr = columns_ptr,
-        columns_size = columns_size,
         device_id = device_id, 
         mtype_id = mtype_id,
         mview_id = mview_id,
@@ -504,10 +470,6 @@ def batch_solve(
 @ft.partial(
     jax.jit, static_argnames=[
         "batch_size",
-        "offsets_ptr",
-        "offsets_size",
-        "columns_ptr",
-        "columns_size",
         "device_id",
         "mtype_id",
         "mview_id"
@@ -516,11 +478,9 @@ def batch_solve(
 def pbatch_solve(
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size,
-        offsets_ptr,
-        offsets_size,
-        columns_ptr,
-        columns_size,
         device_id, 
         mtype_id, 
         mview_id
@@ -541,11 +501,9 @@ def pbatch_solve(
     return solver.bind(
         b_values, 
         csr_values, 
+        csr_offsets,
+        csr_columns,
         batch_size = batch_size,
-        offsets_ptr = offsets_ptr,
-        offsets_size = offsets_size,
-        columns_ptr = columns_ptr,
-        columns_size = columns_size,
         device_id = device_id, 
         mtype_id = mtype_id,
         mview_id = mview_id,
@@ -570,11 +528,14 @@ def general_solve_vmap(
     **kwargs                                    # static params
 ) -> Array:
     
-    b_values, csr_values = vector_arg_values
-    a_b, a_val = batch_axes
+    b_values, csr_values, csr_offsets, csr_columns = vector_arg_values
+    a_b, a_val, a_off, a_col = batch_axes
 
     # guards
-    if any(ax is None for ax in (a_val, a_b)):
+    if any(ax is not None for ax in (a_off, a_col)):
+        raise NotImplementedError("don't support batches of heterogeneous sparsity patterns yet (its coming tho...)")
+
+    if all(ax is None for ax in (a_val, a_b)):
         raise NotImplementedError("Only batched csr_values and b_values are supported right now")
     
     # the non-batched path
@@ -623,9 +584,12 @@ batching.primitive_batchers[solve_single_c128_p] = solve_single_c128_vmap
 # vmap of vmap
 def solve_batch_vmap(vector_arg_values, batch_axes, **kwargs):
     """Handle vmap of already-batched solve"""
-    b_values, csr_values = vector_arg_values
-    a_b, a_val = batch_axes
-    
+    b_values, csr_values, csr_offsets, csr_columns = vector_arg_values
+    a_b, a_val, a_off, a_col = batch_axes
+
+    if any(ax is not None for ax in (a_off, a_col)):
+        raise NotImplementedError("don't support batches of heterogeneous sparsity patterns yet (its coming tho...)")
+
     if a_b is None and a_val is None:
         # Not actually batching
         return batch_solve(*vector_arg_values, **kwargs), (None, None)
@@ -674,7 +638,7 @@ def solve_batch_vmap(vector_arg_values, batch_axes, **kwargs):
     kwargs.__delitem__("batch_size")
 
     x_flat, inertia_flat = solver.bind(
-        b_flat, csr_flat, 
+        b_flat, csr_flat, csr_offsets, csr_columns,
         batch_size=total_batch, 
         **kwargs
     )
@@ -693,14 +657,10 @@ batching.primitive_batchers[solve_pbatch_f64_p] = solve_batch_vmap
 # create python side composable class to ensure validity of the columns and offsets
 class CuDSSSolver:
     def __init__(self, csr_offsets, csr_columns, device_id, mtype_id, mview_id):
-        self._csr_offsets = csr_offsets # hold reference to structures alive in state
-        self._csr_columns = csr_columns # hold reference to structures alive in state
 
         self._solve_fn = ft.partial(solve,
-            offsets_ptr=self._csr_offsets.unsafe_buffer_pointer(),
-            offsets_size=self._csr_offsets.size,
-            columns_ptr=self._csr_columns.unsafe_buffer_pointer(),
-            columns_size=self._csr_columns.size,
+            csr_offsets=csr_offsets,
+            csr_columns=csr_columns,
             device_id=device_id,
             mtype_id=mtype_id,
             mview_id=mview_id

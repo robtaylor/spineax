@@ -26,6 +26,7 @@ This currently lacks:
 
 - ❌ Differentiation through cuDSS solvers is not currently supported (fairly easy to implement if people need it)
 - ❌ Does not support full retrieval of all auxillary information from batched system (a cuDSS limitation as of 0.7.0)
+- ❌ vmap over heterogeneous sparsity patterns in batch is currently not supported (the C++ code is written, but the clean vmap implementation is not)
 
 Caveats:
 

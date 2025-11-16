@@ -5,7 +5,7 @@
 #include <vector>
 #include <complex>
 #include <type_traits>
-#include <cuComplex.h> // For device-side complex number operations
+// #include <cuComplex.h> // For device-side complex number operations
 
 #include "cuda_runtime_api.h"
 #include "nanobind/nanobind.h"
@@ -165,10 +165,6 @@ template <> ffi::TypeId CudssState<ffi::C128>::id = {};
 // instantiate everything that is not a function of the context (cudaStream_t)
 template <ffi::DataType T>
 static ffi::ErrorOr<std::unique_ptr<CudssState<T>>> CudssInstantiate(
-    int32_t* offsets_ptr,             // pointers and sizes of csr structure defn
-    const int64_t offsets_size,             // pointers and sizes of csr structure defn
-    int32_t* columns_ptr,             // pointers and sizes of csr structure defn
-    const int64_t columns_size,             // pointers and sizes of csr structure defn
     const int64_t device_id,                    // the device to run this on
     const int64_t mtype_id,                     // {0: gen, 1: sym, 2: herm, 3: spd, 4: hpd}
     const int64_t mview_id                      // {0: full, 1: triu, 2: tril}
@@ -212,8 +208,7 @@ static ffi::ErrorOr<std::unique_ptr<CudssState<T>>> CudssInstantiate(
     }
 
     // may as well store these for later for readability
-    state->n = offsets_size - 1;
-    state->nnz = columns_size;
+
     state->nrhs = 1; // the non-batched case
     
     // CUDA setup
@@ -233,6 +228,8 @@ static ffi::Error CudssExecute(
     CudssState<T>* state,                      // the state we instantiated in CudssInstantiate
     ffi::Buffer<T> b_values_buf,            // the real input data that varies per solution
     ffi::Buffer<T> csr_values_buf,          // the real input data that varies per solution
+    ffi::Buffer<ffi::S32> offsets_buf,
+    ffi::Buffer<ffi::S32> columns_buf,
     ffi::ResultBuffer<T> out_values_buf,    // the output buffer we write the answer to
     ffi::ResultBuffer<ffi::S64> lu_nnz_buf,
     ffi::ResultBuffer<ffi::S32> npivots_buf,
@@ -248,10 +245,6 @@ static ffi::Error CudssExecute(
     ffi::ResultBuffer<ffi::S32> elimination_tree_buf,
     ffi::ResultBuffer<ffi::S32> nsuperpanels_buf,
     ffi::ResultBuffer<ffi::S64> schur_shape_buf,
-    int32_t* offsets_ptr,             // pointers and sizes of csr structure defn
-    const int64_t offsets_size,             // pointers and sizes of csr structure defn
-    int32_t* columns_ptr,             // pointers and sizes of csr structure defn
-    const int64_t columns_size,             // pointers and sizes of csr structure defn
     const int64_t device_id,                    // the device to run this on
     const int64_t mtype_id,                     // {0: gen, 1: sym, 2: herm, 3: spd, 4: hpd}
     const int64_t mview_id                      // {0: full, 1: triu, 2: tril}
@@ -259,6 +252,11 @@ static ffi::Error CudssExecute(
 
     // instantiate system branch
     if (state->call_count == 0) {
+
+        // figure this out on first call
+        state->n = offsets_buf.element_count() - 1;
+        state->nnz = columns_buf.element_count();
+
         // CuDSS setup
         CUDSS_CALL_AND_CHECK(cudssCreate(&state->handle), state->status, "cudssCreate");
         CUDSS_CALL_AND_CHECK(cudssSetStream(state->handle, stream), state->status, "cudssSetStream");
@@ -273,8 +271,8 @@ static ffi::Error CudssExecute(
             out_values_buf->typed_data(), state->cuda_dtype, CUDSS_LAYOUT_COL_MAJOR), state->status, "cudssMatrixCreateDn for x");
 
         CUDSS_CALL_AND_CHECK(cudssMatrixCreateCsr(&state->A, state->n, state->n, state->nnz,
-            offsets_ptr, NULL,
-            columns_ptr,
+            offsets_buf.typed_data(), NULL,
+            columns_buf.typed_data(),
             csr_values_buf.typed_data(),
             CUDA_R_32I, state->cuda_dtype,
             state->mtype, state->mview, state->base), state->status, "cudssMatrixCreateCsr");
@@ -303,7 +301,13 @@ static ffi::Error CudssExecute(
         CUDSS_CALL_AND_CHECK(cudssSetStream(state->handle, stream), state->status, "cudssSetStream");
 
         // set the values of the matrices - different to my batched solution
-        CUDSS_CALL_AND_CHECK(cudssMatrixSetValues(state->A, csr_values_buf.typed_data()), state->status, "update_pointers A");
+        // CUDSS_CALL_AND_CHECK(cudssMatrixSetValues(state->A, csr_values_buf.typed_data()), state->status, "update_pointers A");
+
+        CUDSS_CALL_AND_CHECK(cudssMatrixSetCsrPointers(state->A,
+            offsets_buf.typed_data(), NULL,
+            columns_buf.typed_data(),
+            csr_values_buf.typed_data()), state->status, "update_pointers A");
+
         CUDSS_CALL_AND_CHECK(cudssMatrixSetValues(state->b, b_values_buf.typed_data()), state->status, "update_pointers b");
         CUDSS_CALL_AND_CHECK(cudssMatrixSetValues(state->x, out_values_buf->typed_data()), state->status, "update_pointers x");
 
@@ -418,10 +422,6 @@ static ffi::Error CudssExecute(
 #define DEFINE_CUDSS_FFI_HANDLERS(TypeName, DataType) \
     XLA_FFI_DEFINE_HANDLER(kCudssInstantiate##TypeName, CudssInstantiate<DataType>, \
         ffi::Ffi::BindInstantiate() \
-            .Attr<ffi::Pointer<int32_t>>("offsets_ptr") \
-            .Attr<int64_t>("offsets_size") \
-            .Attr<ffi::Pointer<int32_t>>("columns_ptr") \
-            .Attr<int64_t>("columns_size") \
             .Attr<int64_t>("device_id") \
             .Attr<int64_t>("mtype_id") \
             .Attr<int64_t>("mview_id")); \
@@ -432,6 +432,8 @@ static ffi::Error CudssExecute(
             .Ctx<ffi::State<CudssState<DataType>>>() \
             .Arg<ffi::Buffer<DataType>>() \
             .Arg<ffi::Buffer<DataType>>() \
+            .Arg<ffi::Buffer<ffi::S32>>() \
+            .Arg<ffi::Buffer<ffi::S32>>() \
             .Ret<ffi::Buffer<DataType>>() \
             .Ret<ffi::Buffer<ffi::S64>>() \
             .Ret<ffi::Buffer<ffi::S32>>() \
@@ -447,10 +449,6 @@ static ffi::Error CudssExecute(
             .Ret<ffi::Buffer<ffi::S32>>() \
             .Ret<ffi::Buffer<ffi::S32>>() \
             .Ret<ffi::Buffer<ffi::S64>>() \
-            .Attr<ffi::Pointer<int32_t>>("offsets_ptr") \
-            .Attr<int64_t>("offsets_size") \
-            .Attr<ffi::Pointer<int32_t>>("columns_ptr") \
-            .Attr<int64_t>("columns_size") \
             .Attr<int64_t>("device_id") \
             .Attr<int64_t>("mtype_id") \
             .Attr<int64_t>("mview_id"));
