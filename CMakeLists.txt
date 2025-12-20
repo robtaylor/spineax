@@ -212,6 +212,7 @@ foreach(TARGET ${SPINEAX_TARGETS})
   )
 endforeach()
 
+# Note: pbatch_solve disabled due to CUDA kernel version mismatch
 install(
   TARGETS ${SPINEAX_TARGETS}
   LIBRARY
