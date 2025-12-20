@@ -261,7 +261,6 @@ static ffi::Error CudssExecute(
         state->call_count++;
     }
     else {
-        printf("not first execute call\n");
         // stream can change between calls!!!
         CUDSS_CALL_AND_CHECK(cudssSetStream(state->handle, stream), state->status, "cudssSetStream");
 
