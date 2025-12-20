@@ -19,7 +19,8 @@ dependencies = [
     "jax[cuda12]", # gives us XLA, CUDART, nvcc...
     "nvidia-cudss-cu12", # cudss is in pip!!! how helpful
     "ninja", # for hot re-building on editable install
-    "jaxtyping"
+    "jaxtyping",
+    "equinox",  # required by solver.py
 ]
 
 [tool.scikit-build]
