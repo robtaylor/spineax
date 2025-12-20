@@ -143,10 +143,10 @@ nanobind_add_module(single_solve NOMINSIZE
   src/spineax/cudss/single_solve.cpp
 )
 
-foreach(TARGET 
+foreach(TARGET
   batch_solve
   pbatch_solve
-  single_solve 
+  single_solve
   single_solve_re
 )
     target_include_directories(${TARGET} PRIVATE
@@ -161,6 +161,12 @@ foreach(TARGET
         cudss_from_python
         cudart_from_python
         cublas_from_python
+    )
+
+    # Suppress warnings from XLA FFI headers that have control flow issues
+    # These are in jaxlib's XLA headers, not in spineax code
+    target_compile_options(${TARGET} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-return-type -Wno-attributes>
     )
     
     # Add RPATH so the .so can find its dependencies
