@@ -288,6 +288,17 @@ def register_ffi(name: str, func, *, type: str, platform: str = "CUDA"):
     # order matters, ffi_target needs to be registered after type
     jax.ffi.register_ffi_target(name, handler, platform=platform)
 
+# Helper for register_ffi_type_id - not supported in jaxlib > 0.4.31
+def _try_register_type_id(name, type_id, platform):
+    """Try to register FFI type ID, skip if not supported (jaxlib > 0.4.31)."""
+    try:
+        jax.ffi.register_ffi_type_id(name, type_id, platform=platform)
+    except ValueError as e:
+        if "not supported" in str(e):
+            pass  # Silently skip - stateful FFI not available in this jaxlib version
+        else:
+            raise
+
 # single
 register_ffi("solve_single_f32", single_solve, type="f32")
 register_ffi("solve_single_f64", single_solve, type="f64")
