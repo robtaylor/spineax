@@ -110,6 +110,7 @@ struct CudssState {
     int64_t nrhs = 0;
     int64_t call_count = 0; // necessary for detecting if we need further instantiation in execution stage
     size_t sizeWritten = 0;
+    int32_t do_refactorize; // host-side flag read from traced GPU signal
     cudaDataType cuda_dtype = get_cuda_data_type<T>();
 
     // this is literally only for debugging
