@@ -22,6 +22,14 @@ except ImportError:
     pbatch_solve = None
     _PBATCH_AVAILABLE = False
 
+# baspacho_solve is optional - provides Metal/OpenCL/CPU support via BaSpaCho
+try:
+    from spineax import baspacho_solve
+    _BASPACHO_AVAILABLE = True
+except ImportError:
+    baspacho_solve = None
+    _BASPACHO_AVAILABLE = False
+
 # primitives ===================================================================
 # single
 solve_single_f32_p = jax.extend.core.Primitive("solve_single_f32")
@@ -305,11 +313,16 @@ def _register_ffi_handler(name, handler_fn, state_type_fn, type_id_fn, platform)
             else:
                 raise
 
-# single
+# single - CUDA
 _register_ffi_handler("solve_single_f32", single_solve.handler_f32, single_solve.state_type_f32, single_solve.type_id_f32, platform="CUDA")
 _register_ffi_handler("solve_single_f64", single_solve.handler_f64, single_solve.state_type_f64, single_solve.type_id_f64, platform="CUDA")
 _register_ffi_handler("solve_single_c64", single_solve.handler_c64, single_solve.state_type_c64, single_solve.type_id_c64, platform="CUDA")
 _register_ffi_handler("solve_single_c128", single_solve.handler_c128, single_solve.state_type_c128, single_solve.type_id_c128, platform="CUDA")
+
+# single - Metal/BaSpaCho (f32/f64 only, no complex support yet)
+if _BASPACHO_AVAILABLE:
+    _register_ffi_handler("solve_single_f32", baspacho_solve.handler_f32, baspacho_solve.state_type_f32, baspacho_solve.type_id_f32, platform="iree_metal")
+    _register_ffi_handler("solve_single_f64", baspacho_solve.handler_f64, baspacho_solve.state_type_f64, baspacho_solve.type_id_f64, platform="iree_metal")
 
 solve_single_f32_low = mlir.lower_fun(solve_single_f32_impl, multiple_results=True)
 mlir.register_lowering(solve_single_f32_p, solve_single_f32_low)

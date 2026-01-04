@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.15...3.27)
 project(${SKBUILD_PROJECT_NAME} LANGUAGES CXX)
 
+# Backend options
+option(SPINEAX_USE_CUDA "Build with CUDA/cuDSS backend" ON)
+option(SPINEAX_USE_BASPACHO "Build with BaSpaCho backend (Metal/OpenCL/CPU)" OFF)
+
+# BaSpaCho path - set this to your baspacho installation
+set(BASPACHO_ROOT "" CACHE PATH "Path to BaSpaCho installation")
+
 # Force all CUDA libraries to be linked dynamically.
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 
@@ -8,7 +15,18 @@ set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 find_package(Python COMPONENTS Interpreter Development REQUIRED)
 message(STATUS "Using Python interpreter: ${Python_EXECUTABLE}")
 
-# 2. Get the path to the CUDA libraries from the Python environment.
+# 2. Find nanobind (required for all backends)
+find_package(nanobind CONFIG REQUIRED)
+
+# 3. Find XLA FFI headers (required for all backends)
+execute_process(
+  COMMAND "${Python_EXECUTABLE}"
+          "-c" "from jax import ffi; print(ffi.include_dir())"
+  OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE XLA_DIR)
+message(STATUS "XLA include directory: ${XLA_DIR}")
+
+# 4. Get the path to the CUDA libraries from the Python environment.
+if(SPINEAX_USE_CUDA)
 execute_process(
     COMMAND ${Python_EXECUTABLE} -c "
 import sys
@@ -104,15 +122,6 @@ set_target_properties(cublas_from_python PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${ENV_NVIDIA_PATH}/nvidia/cublas/include"
 )
 
-find_package(nanobind CONFIG REQUIRED)
-
-# XLA
-execute_process(
-  COMMAND "${Python_EXECUTABLE}"
-          "-c" "from jax import ffi; print(ffi.include_dir())"
-  OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE XLA_DIR)
-message(STATUS "XLA include directory: ${XLA_DIR}")
-
 # O3 optimization build
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
@@ -120,8 +129,10 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 enable_language(CUDA)
+endif() # SPINEAX_USE_CUDA
 
-# cuDSS FFI files
+# cuDSS FFI files (CUDA backend)
+if(SPINEAX_USE_CUDA)
 
 # traditional batch
 nanobind_add_module(batch_solve NOMINSIZE 
@@ -188,3 +199,103 @@ install(
   LIBRARY
   DESTINATION spineax
 )
+endif() # SPINEAX_USE_CUDA
+
+#==============================================================================
+# BaSpaCho backend (Metal/OpenCL/CPU)
+#==============================================================================
+if(SPINEAX_USE_BASPACHO)
+  message(STATUS "Building BaSpaCho backend")
+
+  # Find BaSpaCho
+  if(BASPACHO_ROOT)
+    set(BASPACHO_INCLUDE_DIR "${BASPACHO_ROOT}")
+    set(BASPACHO_BUILD_DIR "${BASPACHO_ROOT}/build")
+    set(EIGEN_INCLUDE_DIR "${BASPACHO_BUILD_DIR}/_deps/eigen-src")
+
+    # Find baspacho library (static)
+    find_library(BASPACHO_LIBRARY
+      NAMES BaSpaCho BaSpaCho_static baspacho
+      PATHS "${BASPACHO_BUILD_DIR}/baspacho/baspacho" "${BASPACHO_BUILD_DIR}/baspacho" "${BASPACHO_BUILD_DIR}"
+      NO_DEFAULT_PATH
+    )
+
+    if(NOT BASPACHO_LIBRARY)
+      message(FATAL_ERROR "Could not find baspacho library in ${BASPACHO_BUILD_DIR}")
+    endif()
+
+    message(STATUS "Found BaSpaCho: ${BASPACHO_LIBRARY}")
+    message(STATUS "BaSpaCho include: ${BASPACHO_INCLUDE_DIR}")
+
+    # Create imported target (static library)
+    add_library(baspacho STATIC IMPORTED)
+    set_target_properties(baspacho PROPERTIES
+      IMPORTED_LOCATION "${BASPACHO_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${BASPACHO_INCLUDE_DIR}"
+    )
+
+    # BaSpaCho dependencies - find dispenso
+    find_library(DISPENSO_LIBRARY
+      NAMES dispenso
+      PATHS "${BASPACHO_BUILD_DIR}/_deps/dispenso-build/dispenso"
+      NO_DEFAULT_PATH
+    )
+    if(DISPENSO_LIBRARY)
+      message(STATUS "Found dispenso: ${DISPENSO_LIBRARY}")
+    endif()
+  else()
+    message(FATAL_ERROR "BASPACHO_ROOT must be set when SPINEAX_USE_BASPACHO=ON")
+  endif()
+
+  # BaSpaCho solve module
+  nanobind_add_module(baspacho_solve NOMINSIZE
+    src/spineax/cudss/baspacho_solve.cpp
+  )
+
+  target_include_directories(baspacho_solve PRIVATE
+    ${XLA_DIR}
+    ${BASPACHO_INCLUDE_DIR}
+    ${EIGEN_INCLUDE_DIR}
+  )
+
+  # Check for Metal and BLAS support on Apple
+  if(APPLE)
+    find_library(METAL_FRAMEWORK Metal)
+    find_library(FOUNDATION_FRAMEWORK Foundation)
+    find_library(ACCELERATE_FRAMEWORK Accelerate)
+  endif()
+
+  target_link_libraries(baspacho_solve PRIVATE
+    baspacho
+  )
+
+  # Add dispenso if found
+  if(DISPENSO_LIBRARY)
+    target_link_libraries(baspacho_solve PRIVATE ${DISPENSO_LIBRARY})
+  endif()
+
+  # Add BLAS/LAPACK (Accelerate on macOS)
+  if(APPLE AND ACCELERATE_FRAMEWORK)
+    target_link_libraries(baspacho_solve PRIVATE ${ACCELERATE_FRAMEWORK})
+  endif()
+
+  # Enable Metal backend on macOS
+  if(APPLE AND METAL_FRAMEWORK)
+    message(STATUS "Metal framework found - enabling Metal backend")
+    target_compile_definitions(baspacho_solve PRIVATE BASPACHO_USE_METAL)
+    target_link_libraries(baspacho_solve PRIVATE
+      ${METAL_FRAMEWORK}
+      ${FOUNDATION_FRAMEWORK}
+    )
+  endif()
+
+  # Suppress XLA FFI header warnings
+  target_compile_options(baspacho_solve PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-Wno-return-type -Wno-attributes>
+  )
+
+  install(
+    TARGETS baspacho_solve
+    LIBRARY DESTINATION spineax
+  )
+endif() # SPINEAX_USE_BASPACHO
